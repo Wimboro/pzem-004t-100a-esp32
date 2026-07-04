@@ -523,6 +523,34 @@ void reconnectMqttIfNeeded() {
                               mqtt2DiscoveryPublished);
 }
 
+void enterOtaMode() {
+  if (otaInProgress) {
+    return;
+  }
+
+  otaInProgress = true;
+  Serial.println(F("OTA mulai. PZEM dan MQTT dihentikan sementara."));
+
+  if (mqttClient.connected()) {
+    mqttClient.publish(MQTT_STATUS_TOPIC, "offline", true);
+    mqttClient.disconnect();
+  }
+
+  if (mqttClient2.connected()) {
+    mqttClient2.publish(MQTT_STATUS_TOPIC, "offline", true);
+    mqttClient2.disconnect();
+  }
+
+  PzemSerial.end();
+  drawOledStatus(F("OTA update"), F("PZEM/MQTT pause"));
+}
+
+void recoverFromOtaError() {
+  otaInProgress = false;
+  PzemSerial.begin(9600, SERIAL_8N1, PZEM_RX_PIN, PZEM_TX_PIN);
+  lastReadAt = millis();
+}
+
 void setupOTA() {
   ArduinoOTA.setHostname(OTA_HOSTNAME);
 
@@ -531,9 +559,7 @@ void setupOTA() {
   }
 
   ArduinoOTA.onStart([]() {
-    otaInProgress = true;
-    Serial.println(F("OTA mulai."));
-    drawOledStatus(F("OTA update"), F("Mulai..."));
+    enterOtaMode();
   });
 
   ArduinoOTA.onEnd([]() {
@@ -557,9 +583,9 @@ void setupOTA() {
   });
 
   ArduinoOTA.onError([](ota_error_t error) {
-    otaInProgress = false;
     Serial.print(F("OTA error: "));
     Serial.println(static_cast<int>(error));
+    recoverFromOtaError();
     drawOledStatus(F("OTA error"), F("Cek koneksi"));
   });
 
@@ -651,6 +677,16 @@ void loop() {
 
   unsigned long now = millis();
   if (now - lastReadAt >= READ_INTERVAL_MS) {
+    if (WiFi.status() == WL_CONNECTED) {
+      for (uint8_t i = 0; i < 20; i++) {
+        ArduinoOTA.handle();
+        delay(1);
+        if (otaInProgress) {
+          return;
+        }
+      }
+    }
+
     lastReadAt = now;
     lastReading = readPzem();
     printReading(lastReading);
